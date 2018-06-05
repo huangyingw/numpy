@@ -10,7 +10,7 @@
     remote = numpy
     branch = master
 [merge]
-	allow = true
+    allow = true
 [branch "dev"]
     remote = github
     merge = refs/heads/dev
@@ -18,4 +18,4 @@
     remote = numpy
     merge = refs/heads/master
 [commit]
-	message = n
+    message = n
