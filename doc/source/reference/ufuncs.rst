@@ -16,7 +16,7 @@ A universal function (or :term:`ufunc` for short) is a function that
 operates on :class:`ndarrays <ndarray>` in an element-by-element fashion,
 supporting :ref:`array broadcasting <ufuncs.broadcasting>`, :ref:`type
 casting <ufuncs.casting>`, and several other standard features. That
-is, a ufunc is a ":term:`vectorized`" wrapper for a function that
+is, a ufunc is a ":term:`vectorized <vectorization>`" wrapper for a function that
 takes a fixed number of specific inputs and produces a fixed number of
 specific outputs.
 
@@ -59,7 +59,7 @@ understood by four rules:
    entry in that dimension will be used for all calculations along
    that dimension. In other words, the stepping machinery of the
    :term:`ufunc` will simply not step along that dimension (the
-   :term:`stride` will be 0 for that dimension).
+   :ref:`stride <memory-layout>` will be 0 for that dimension).
 
 Broadcasting is used throughout NumPy to decide how to handle
 disparately shaped arrays; for example, all arithmetic operations (``+``,
@@ -70,7 +70,7 @@ arrays before operation.
 
 .. index:: broadcastable
 
-A set of arrays is called ":term:`broadcastable`" to the same shape if
+A set of arrays is called "broadcastable" to the same shape if
 the above rules produce a valid result, *i.e.*, one of the following
 is true:
 
@@ -360,6 +360,17 @@ advanced usage and will not typically be used.
     and for generalized ufuncs for which all outputs are scalars, the output
     tuples can be omitted.
 
+*axis*
+
+    .. versionadded:: 1.15
+
+    A single axis over which a generalized ufunc should operate. This is a
+    short-cut for ufuncs that operate over a single, shared core dimension,
+    equivalent to passing in ``axes`` with entries of ``(axis,)`` for each
+    single-core-dimension argument and ``()`` for all others.  For instance,
+    for a signature ``(i),(i)->()``, it is equivalent to passing in
+    ``axes=[(axis,), (axis,), ()]``.
+
 *keepdims*
 
     .. versionadded:: 1.15
@@ -370,7 +381,7 @@ advanced usage and will not typically be used.
     ufuncs that operate on inputs that all have the same number of core
     dimensions and with outputs that have no core dimensions , i.e., with
     signatures like ``(i),(i)->()`` or ``(m,m)->()``. If used, the location of
-    the dimensions in the output can be controlled with ``axes``.
+    the dimensions in the output can be controlled with ``axes`` and ``axis``.
 
 *casting*
 
@@ -575,6 +586,7 @@ Math operations
     sign
     heaviside
     conj
+    conjugate
     exp
     exp2
     log

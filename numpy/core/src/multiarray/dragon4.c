@@ -114,7 +114,7 @@ LogBase2_64(npy_uint64 val)
     return LogBase2_32((npy_uint32)val);
 }
 
-#if defined(HAVE_LDOUBLE_IEEE_QUAD_LE)
+#if defined(HAVE_LDOUBLE_IEEE_QUAD_LE) || defined(HAVE_LDOUBLE_IEEE_QUAD_BE)
 static npy_uint32
 LogBase2_128(npy_uint64 hi, npy_uint64 lo)
 {
@@ -215,7 +215,10 @@ BigInt_Set_uint64(BigInt *i, npy_uint64 val)
     }
 }
 
-#if defined(HAVE_LDOUBLE_IEEE_QUAD_LE)
+#if (defined(HAVE_LDOUBLE_IBM_DOUBLE_DOUBLE_LE) || \
+     defined(HAVE_LDOUBLE_IBM_DOUBLE_DOUBLE_BE) || \
+     defined(HAVE_LDOUBLE_IEEE_QUAD_LE) || \
+     defined(HAVE_LDOUBLE_IEEE_QUAD_BE))
 static void
 BigInt_Set_2x_uint64(BigInt *i, npy_uint64 hi, npy_uint64 lo)
 {
@@ -247,7 +250,7 @@ BigInt_Set_2x_uint64(BigInt *i, npy_uint64 hi, npy_uint64 lo)
             i->blocks[0] = lo & bitmask_u64(32);
     }
 }
-#endif /* QUAD */
+#endif /* DOUBLE_DOUBLE and QUAD */
 
 static void
 BigInt_Set_uint32(BigInt *i, npy_uint32 val)
@@ -2696,7 +2699,7 @@ Dragon4_PrintFloat_Intel_extended128(
 }
 #endif /* HAVE_LDOUBLE_INTEL_EXTENDED_16_BYTES_LE */
 
-#if defined(HAVE_LDOUBLE_IEEE_QUAD_LE)
+#if defined(HAVE_LDOUBLE_IEEE_QUAD_LE) || defined(HAVE_LDOUBLE_IEEE_QUAD_BE)
 /*
  * IEEE binary128 floating-point format
  *
@@ -2705,18 +2708,14 @@ Dragon4_PrintFloat_Intel_extended128(
  * mantissa: 112 bits
  *
  * Currently binary128 format exists on only a few CPUs, such as on the POWER9
- * arch. Because of this, this code has not been tested. I am not sure if the
- * arch also supports uint128, and C does not seem to support int128 literals.
- * So we use uint64 to do manipulation. Unfortunately this means we are endian
- * dependent. Assume little-endian for now, can fix later once binary128
- * becomes more common.
+ * arch or aarch64. Because of this, this code has not been extensively tested.
+ * I am not sure if the arch also supports uint128, and C does not seem to
+ * support int128 literals. So we use uint64 to do manipulation.
  */
 static npy_uint32
 Dragon4_PrintFloat_IEEE_binary128(
-    Dragon4_Scratch *scratch, npy_float128 *value, Dragon4_Options *opt)
+    Dragon4_Scratch *scratch, FloatVal128 val128, Dragon4_Options *opt)
 {
-    FloatUnion128 buf128;
-
     char *buffer = scratch->repr;
     npy_uint32 bufferSize = sizeof(scratch->repr);
     BigInt *bigints = scratch->bigints;
@@ -2729,8 +2728,6 @@ Dragon4_PrintFloat_IEEE_binary128(
     npy_bool hasUnequalMargins;
     char signbit = '\0';
 
-    buf128.floatingPoint = *value;
-
     if (bufferSize == 0) {
         return 0;
     }
@@ -2740,11 +2737,10 @@ Dragon4_PrintFloat_IEEE_binary128(
         return 0;
     }
 
-    /* Assumes little-endian !!! */
-    mantissa_hi = buf128.integer.a & bitmask_u64(48);
-    mantissa_lo = buf128.integer.b;
-    floatExponent = (buf128.integer.a >> 48) & bitmask_u32(15);
-    floatSign = buf128.integer.a >> 63;
+    mantissa_hi = val128.hi & bitmask_u64(48);
+    mantissa_lo = val128.lo;
+    floatExponent = (val128.hi >> 48) & bitmask_u32(15);
+    floatSign = val128.hi >> 63;
 
     /* output the sign */
     if (floatSign != 0) {
@@ -2808,7 +2804,265 @@ Dragon4_PrintFloat_IEEE_binary128(
     return Format_floatbits(buffer, bufferSize, bigints, exponent,
                             signbit, mantissaBit, hasUnequalMargins, opt);
 }
+
+#if defined(HAVE_LDOUBLE_IEEE_QUAD_LE)
+static npy_uint32
+Dragon4_PrintFloat_IEEE_binary128_le(
+    Dragon4_Scratch *scratch, npy_float128 *value, Dragon4_Options *opt)
+{
+    FloatVal128 val128;
+    FloatUnion128 buf128;
+
+    buf128.floatingPoint = *value;
+    val128.lo = buf128.integer.a;
+    val128.hi = buf128.integer.b;
+
+    return Dragon4_PrintFloat_IEEE_binary128(scratch, val128, opt);
+}
 #endif /* HAVE_LDOUBLE_IEEE_QUAD_LE */
+
+#if defined(HAVE_LDOUBLE_IEEE_QUAD_BE)
+/*
+ * This function is untested, very few, if any, architectures implement
+ * big endian IEEE binary128 floating point.
+ */
+static npy_uint32
+Dragon4_PrintFloat_IEEE_binary128_be(
+    Dragon4_Scratch *scratch, npy_float128 *value, Dragon4_Options *opt)
+{
+    FloatVal128 val128;
+    FloatUnion128 buf128;
+
+    buf128.floatingPoint = *value;
+    val128.lo = buf128.integer.b;
+    val128.hi = buf128.integer.a;
+
+    return Dragon4_PrintFloat_IEEE_binary128(scratch, val128, opt);
+}
+#endif /* HAVE_LDOUBLE_IEEE_QUAD_BE */
+
+#endif /* HAVE_LDOUBLE_IEEE_QUAD_LE | HAVE_LDOUBLE_IEEE_BE*/
+
+#if (defined(HAVE_LDOUBLE_IBM_DOUBLE_DOUBLE_LE) || \
+     defined(HAVE_LDOUBLE_IBM_DOUBLE_DOUBLE_BE))
+/*
+ * IBM extended precision 128-bit floating-point format, aka IBM double-double
+ *
+ * IBM's double-double type is a pair of IEEE binary64 values, which you add
+ * together to get a total value. The exponents are arranged so that the lower
+ * double is about 2^52 times smaller than the high one, and the nearest
+ * float64 value is simply the upper double, in which case the pair is
+ * considered "normalized" (not to confuse with "normal" and "subnormal"
+ * binary64 values). We assume normalized values. You can see the glibc's
+ * printf on ppc does so too by constructing un-normalized values to get
+ * strange behavior from the OS printf:
+ *
+ *     >>> from numpy.core._multiarray_tests import format_float_OSprintf_g
+ *     >>> x = np.array([0.3,0.3], dtype='f8').view('f16')[0]
+ *     >>> format_float_OSprintf_g(x, 2)
+ *     0.30
+ *     >>> format_float_OSprintf_g(2*x, 2)
+ *     1.20
+ *
+ * If we don't assume normalization, x should really print as 0.6.
+ *
+ * For normalized values gcc assumes that the total mantissa is no
+ * more than 106 bits (53+53), so we can drop bits from the second double which
+ * would be pushed past 106 when left-shifting by its exponent, as happens
+ * sometimes. (There has been debate about this, see
+ * https://gcc.gnu.org/bugzilla/show_bug.cgi?format=multiple&id=70117,
+ * https://sourceware.org/bugzilla/show_bug.cgi?id=22752 )
+ *
+ * Note: This function is for the IBM-double-double which is a pair of IEEE
+ * binary64 floats, like on ppc64 systems. This is *not* the hexadecimal
+ * IBM-double-double type, which is a pair of IBM hexadecimal64 floats.
+ *
+ * See also:
+ * https://gcc.gnu.org/wiki/Ieee128PowerPCA
+ * https://www.ibm.com/support/knowledgecenter/en/ssw_aix_71/com.ibm.aix.genprogc/128bit_long_double_floating-point_datatype.htm
+ */
+static npy_uint32
+Dragon4_PrintFloat_IBM_double_double(
+    Dragon4_Scratch *scratch, npy_float128 *value, Dragon4_Options *opt)
+{
+    char *buffer = scratch->repr;
+    npy_uint32 bufferSize = sizeof(scratch->repr);
+    BigInt *bigints = scratch->bigints;
+
+    FloatVal128 val128;
+    FloatUnion128 buf128;
+
+    npy_uint32 floatExponent1, floatExponent2;
+    npy_uint64 floatMantissa1, floatMantissa2;
+    npy_uint32 floatSign1, floatSign2;
+
+    npy_uint64 mantissa1, mantissa2;
+    npy_int32 exponent1, exponent2;
+    int shift;
+    npy_uint32 mantissaBit;
+    npy_bool hasUnequalMargins;
+    char signbit = '\0';
+
+    if (bufferSize == 0) {
+        return 0;
+    }
+
+    if (bufferSize == 1) {
+        buffer[0] = '\0';
+        return 0;
+    }
+
+    /* The high part always comes before the low part, regardless of the
+     * endianness of the system. */
+    buf128.floatingPoint = *value;
+    val128.hi = buf128.integer.a;
+    val128.lo = buf128.integer.b;
+
+    /* deconstruct the floating point values */
+    floatMantissa1 = val128.hi & bitmask_u64(52);
+    floatExponent1 = (val128.hi >> 52) & bitmask_u32(11);
+    floatSign1 = (val128.hi >> 63) != 0;
+
+    floatMantissa2 = val128.lo & bitmask_u64(52);
+    floatExponent2 = (val128.lo >> 52) & bitmask_u32(11);
+    floatSign2 = (val128.lo >> 63) != 0;
+
+    /* output the sign using 1st float's sign */
+    if (floatSign1) {
+        signbit = '-';
+    }
+    else if (opt->sign) {
+        signbit = '+';
+    }
+
+    /* we only need to look at the first float for inf/nan */
+    if (floatExponent1 == bitmask_u32(11)) {
+        return PrintInfNan(buffer, bufferSize, floatMantissa1, 13, signbit);
+    }
+
+    /* else this is a number */
+
+    /* Factor the 1st value into its parts, see binary64 for comments. */
+    if (floatExponent1 == 0) {
+        /*
+         * If the first number is a subnormal value, the 2nd has to be 0 for
+         * the float128 to be normalized, so we can ignore it. In this case
+         * the float128 only has the precision of a single binary64 value.
+         */
+        mantissa1            = floatMantissa1;
+        exponent1            = 1 - 1023 - 52;
+        mantissaBit          = LogBase2_64(mantissa1);
+        hasUnequalMargins    = NPY_FALSE;
+
+        BigInt_Set_uint64(&bigints[0], mantissa1);
+    }
+    else {
+        mantissa1            = (1ull << 52) | floatMantissa1;
+        exponent1            = floatExponent1 - 1023 - 52;
+        mantissaBit          = 52 + 53;
+
+        /*
+         * Computing hasUnequalMargins and mantissaBit:
+         * This is a little trickier than for IEEE formats.
+         *
+         * When both doubles are "normal" it is clearer since we can think of
+         * it as an IEEE type with a 106 bit mantissa. This value can never
+         * have "unequal" margins because of the implied 1 bit in the 2nd
+         * value.  (unequal margins only happen when the mantissa has a value
+         * like "10000000000...", all zeros except the implied bit at the
+         * start, since the next lowest number has a different exponent).
+         * mantissaBits will always be 52+53 in this case.
+         *
+         * If the 1st number is a very small normal, and the 2nd is subnormal
+         * and not 2^52 times smaller, the number behaves like a subnormal
+         * overall, where the upper number just adds some bits on the left.
+         * Like usual subnormals, it has "equal" margins. The slightly tricky
+         * thing is that the number of mantissaBits varies. It will be 52
+         * (from lower double) plus a variable number depending on the upper
+         * number's exponent. We recompute the number of bits in the shift
+         * calculation below, because the shift will be equal to the number of
+         * lost bits.
+         *
+         * We can get unequal margins only if the first value has all-0
+         * mantissa (except implied bit), and the second value is exactly 0. As
+         * a special exception the smallest normal value (smallest exponent, 0
+         * mantissa) should have equal margins, since it is "next to" a
+         * subnormal value.
+         */
+
+        /* factor the 2nd value into its parts */
+        if (floatExponent2 != 0) {
+            mantissa2            = (1ull << 52) | floatMantissa2;
+            exponent2            = floatExponent2 - 1023 - 52;
+            hasUnequalMargins    = NPY_FALSE;
+        }
+        else {
+            /* shift exp by one so that leading mantissa bit is still bit 53 */
+            mantissa2            = floatMantissa2 << 1;
+            exponent2            = - 1023 - 52;
+            hasUnequalMargins  = (floatExponent1 != 1) && (floatMantissa1 == 0)
+                                                       && (floatMantissa2 == 0);
+        }
+
+        /*
+         * The 2nd val's exponent might not be exactly 52 smaller than the 1st,
+         * it can vary a little bit. So do some shifting of the low mantissa,
+         * so that the total mantissa is equivalent to bits 53 to 0 of the
+         * first double immediately followed by bits 53 to 0 of the second.
+         */
+        shift = exponent1 - exponent2 - 53;
+        if (shift > 0) {
+            /* shift more than 64 is undefined behavior */
+            mantissa2 = shift < 64 ? mantissa2 >> shift : 0;
+        }
+        else if (shift < 0) {
+            /*
+             * This only happens if the 2nd value is subnormal.
+             * We expect that shift > -64, but check it anyway
+             */
+            mantissa2 = -shift < 64 ? mantissa2 << -shift : 0;
+        }
+
+        /*
+         * If the low double is a different sign from the high double,
+         * rearrange so that the total mantissa is the sum of the two
+         * mantissas, instead of a subtraction.
+         * hi - lo  ->  (hi-1) + (1-lo),   where lo < 1
+         */
+        if (floatSign1 != floatSign2 && mantissa2 != 0) {
+            mantissa1--;
+            mantissa2 = (1ull << 53) - mantissa2;
+        }
+
+        /*
+         * Compute the number of bits if we are in the subnormal range.
+         * The value "shift" happens to be exactly the number of lost bits.
+         * Also, shift the bits so that the least significant bit is at
+         * bit position 0, like a typical subnormal. After this exponent1
+         * should always be 2^-1022
+         */
+        if (shift < 0) {
+            mantissa2 = (mantissa2 >> -shift) | (mantissa1 << (53 + shift));
+            mantissa1 = mantissa1 >> -shift;
+            mantissaBit = mantissaBit -(-shift);
+            exponent1 -= shift;
+            DEBUG_ASSERT(exponent1 == -1022);
+        }
+
+        /*
+         * set up the BigInt mantissa, by shifting the parts as needed
+         * We can use | instead of + since the mantissas should not overlap
+         */
+        BigInt_Set_2x_uint64(&bigints[0], mantissa1 >> 11,
+                                         (mantissa1 << 53) | (mantissa2));
+        exponent1 = exponent1 - 53;
+    }
+
+    return Format_floatbits(buffer, bufferSize, bigints, exponent1,
+                            signbit, mantissaBit, hasUnequalMargins, opt);
+}
+
+#endif /* HAVE_LDOUBLE_IBM_DOUBLE_DOUBLE_LE | HAVE_LDOUBLE_IBM_DOUBLE_DOUBLE_BE */
 
 #endif /* NPY_FLOAT128 */
 

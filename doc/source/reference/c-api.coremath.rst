@@ -80,8 +80,9 @@ Floating point classification
 Useful math constants
 ~~~~~~~~~~~~~~~~~~~~~
 
-The following math constants are available in npy_math.h. Single and extended
-precision are also available by adding the F and L suffixes respectively.
+The following math constants are available in ``npy_math.h``. Single
+and extended precision are also available by adding the ``f`` and
+``l`` suffixes respectively.
 
 .. c:var:: NPY_E
 
@@ -222,7 +223,7 @@ Those can be useful for precise floating point comparison.
     Returns the previous status mask.
 
     .. versionadded:: 1.15.0
-n
+
 Complex functions
 ~~~~~~~~~~~~~~~~~
 
@@ -258,7 +259,7 @@ and co.
 Half-precision functions
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. versionadded:: 2.0.0
+.. versionadded:: 1.6.0
 
 The header file <numpy/halffloat.h> provides functions to work with
 IEEE 754-2008 16-bit floating point values. While this format is
@@ -297,10 +298,10 @@ External Links:
 * `OpenGL Half Float Pixel Support`__
 * `The OpenEXR image format`__.
 
-__ http://ieeexplore.ieee.org/servlet/opac?punumber=4610933
-__ http://en.wikipedia.org/wiki/Half_precision_floating-point_format
-__ http://www.opengl.org/registry/specs/ARB/half_float_pixel.txt
-__ http://www.openexr.com/about.html
+__ https://ieeexplore.ieee.org/document/4610935/
+__ https://en.wikipedia.org/wiki/Half-precision_floating-point_format
+__ https://www.khronos.org/registry/OpenGL/extensions/ARB/ARB_half_float_pixel.txt
+__ https://www.openexr.com/about.html
 
 .. c:var:: NPY_HALF_ZERO
 

@@ -9,7 +9,6 @@ from numpy.testing import (
         )
 from numpy import random
 import sys
-import warnings
 
 
 class TestSeed(object):
@@ -401,6 +400,10 @@ class TestRandomDist(object):
         assert_raises(ValueError, sample, [1, 2], 3, p=[1.1, -0.1])
         assert_raises(ValueError, sample, [1, 2], 3, p=[0.4, 0.4])
         assert_raises(ValueError, sample, [1, 2, 3], 4, replace=False)
+        # gh-13087
+        assert_raises(ValueError, sample, [1, 2, 3], -2, replace=False)
+        assert_raises(ValueError, sample, [1, 2, 3], (-1,), replace=False)
+        assert_raises(ValueError, sample, [1, 2, 3], (-1, 1), replace=False)
         assert_raises(ValueError, sample, [1, 2, 3], 2,
                       replace=False, p=[1, 0, 0])
 
@@ -440,6 +443,20 @@ class TestRandomDist(object):
         assert_equal(np.random.choice(6, s, replace=False, p=p).shape, s)
         assert_equal(np.random.choice(np.arange(6), s, replace=True).shape, s)
 
+        # Check zero-size
+        assert_equal(np.random.randint(0, 0, size=(3, 0, 4)).shape, (3, 0, 4))
+        assert_equal(np.random.randint(0, -10, size=0).shape, (0,))
+        assert_equal(np.random.randint(10, 10, size=0).shape, (0,))
+        assert_equal(np.random.choice(0, size=0).shape, (0,))
+        assert_equal(np.random.choice([], size=(0,)).shape, (0,))
+        assert_equal(np.random.choice(['a', 'b'], size=(3, 0, 4)).shape, (3, 0, 4))
+        assert_raises(ValueError, np.random.choice, [], 10)
+
+    def test_choice_nan_probabilities(self):
+        a = np.array([42, 1, 2])
+        p = [None, None, None]
+        assert_raises(ValueError, np.random.choice, a, p=p)
+
     def test_bytes(self):
         np.random.seed(self.seed)
         actual = np.random.bytes(10)
@@ -458,10 +475,13 @@ class TestRandomDist(object):
                      lambda x: [(i, i) for i in x],
                      lambda x: np.asarray([[i, i] for i in x]),
                      lambda x: np.vstack([x, x]).T,
+                     # gh-11442
+                     lambda x: (np.asarray([(i, i) for i in x],
+                                           [("a", int), ("b", int)])
+                                .view(np.recarray)),
                      # gh-4270
                      lambda x: np.asarray([(i, i) for i in x],
-                                          [("a", object, 1),
-                                           ("b", np.int32, 1)])]:
+                                          [("a", object), ("b", np.int32)])]:
             np.random.seed(self.seed)
             alist = conv([1, 2, 3, 4, 5, 6, 7, 8, 9, 0])
             np.random.shuffle(alist)
@@ -494,7 +514,7 @@ class TestRandomDist(object):
 
     def test_binomial(self):
         np.random.seed(self.seed)
-        actual = np.random.binomial(100.123, .456, size=(3, 2))
+        actual = np.random.binomial(100, .456, size=(3, 2))
         desired = np.array([[37, 43],
                             [42, 48],
                             [46, 45]])
@@ -591,7 +611,7 @@ class TestRandomDist(object):
 
     def test_hypergeometric(self):
         np.random.seed(self.seed)
-        actual = np.random.hypergeometric(10.1, 5.5, 14, size=(3, 2))
+        actual = np.random.hypergeometric(10, 5, 14, size=(3, 2))
         desired = np.array([[10, 10],
                             [10, 10],
                             [9, 9]])
@@ -700,6 +720,12 @@ class TestRandomDist(object):
         assert_raises(ValueError, np.random.multivariate_normal, mean, cov,
                       check_valid='raise')
 
+        cov = np.array([[1, 0.1],[0.1, 1]], dtype=np.float32)
+        with suppress_warnings() as sup:
+            np.random.multivariate_normal(mean, cov)
+            w = sup.record(RuntimeWarning)
+            assert len(w) == 0
+
     def test_negative_binomial(self):
         np.random.seed(self.seed)
         actual = np.random.negative_binomial(n=100, p=.12345, size=(3, 2))
@@ -759,7 +785,7 @@ class TestRandomDist(object):
                  [1.40840323350391515e+02, 1.98390255135251704e+05]])
         # For some reason on 32-bit x86 Ubuntu 12.10 the [1, 0] entry in this
         # matrix differs by 24 nulps. Discussion:
-        #   http://mail.python.org/pipermail/numpy-discussion/2012-September/063801.html
+        #   https://mail.python.org/pipermail/numpy-discussion/2012-September/063801.html
         # Consensus is that this is probably some gcc quirk that affects
         # rounding but not in any important way, so we just use a looser
         # tolerance on this test:
@@ -896,6 +922,8 @@ class TestRandomDist(object):
             def __int__(self):
                 raise TypeError
 
+            __index__ = __int__
+
         throwing_int = np.array(1).view(ThrowingInteger)
         assert_raises(TypeError, np.random.hypergeometric, throwing_int, 1, 1)
 
@@ -930,7 +958,8 @@ class TestRandomDist(object):
         assert_array_almost_equal(actual, desired, decimal=15)
 
     def test_weibull_0(self):
-        assert_equal(np.random.weibull(a=0), 0)
+        np.random.seed(self.seed)
+        assert_equal(np.random.weibull(a=0, size=12), np.zeros(12))
         assert_raises(ValueError, np.random.weibull, a=-0.)
 
     def test_zipf(self):
@@ -1336,6 +1365,8 @@ class TestBroadcast(object):
         assert_array_almost_equal(actual, desired, decimal=14)
         assert_raises(ValueError, wald, bad_mean, scale * 3)
         assert_raises(ValueError, wald, mean, bad_scale * 3)
+        assert_raises(ValueError, wald, 0.0, 1)
+        assert_raises(ValueError, wald, 0.5, 0.0)
 
     def test_triangular(self):
         left = [1]
@@ -1444,7 +1475,6 @@ class TestBroadcast(object):
         with np.errstate(invalid='ignore'):
             assert_raises(ValueError, zipf, np.nan)
             assert_raises(ValueError, zipf, [0, 0, np.nan])
-
 
     def test_geometric(self):
         p = [0.5]

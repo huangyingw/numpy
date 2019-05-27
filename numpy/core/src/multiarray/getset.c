@@ -13,12 +13,14 @@
 #include "npy_import.h"
 
 #include "common.h"
+#include "ctors.h"
 #include "scalartypes.h"
 #include "descriptor.h"
 #include "getset.h"
 #include "arrayobject.h"
 #include "mem_overlap.h"
 #include "alloc.h"
+#include "buffer.h"
 
 /*******************  array attribute get and set routines ******************/
 
@@ -142,6 +144,7 @@ array_strides_set(PyArrayObject *self, PyObject *obj)
         offset = PyArray_BYTES(self) - (char *)view.buf;
         numbytes = view.len + offset;
         PyBuffer_Release(&view);
+        _dealloc_cached_buffer_info((PyObject*)new);
     }
 #else
     if (PyArray_BASE(new) &&
@@ -185,12 +188,7 @@ array_strides_set(PyArrayObject *self, PyObject *obj)
 static PyObject *
 array_priority_get(PyArrayObject *self)
 {
-    if (PyArray_CheckExact(self)) {
-        return PyFloat_FromDouble(NPY_PRIORITY);
-    }
-    else {
-        return PyFloat_FromDouble(NPY_PRIORITY);
-    }
+    return PyFloat_FromDouble(NPY_PRIORITY);
 }
 
 static PyObject *
@@ -375,6 +373,7 @@ array_data_set(PyArrayObject *self, PyObject *op)
      * sticks around after the release.
      */
     PyBuffer_Release(&view);
+    _dealloc_cached_buffer_info(op);
 #else
     if (PyObject_AsWriteBuffer(op, &buf, &buf_len) < 0) {
         PyErr_Clear();
@@ -742,20 +741,15 @@ _get_part(PyArrayObject *self, int imag)
         Py_DECREF(type);
         type = new;
     }
-    ret = (PyArrayObject *)
-        PyArray_NewFromDescr(Py_TYPE(self),
-                             type,
-                             PyArray_NDIM(self),
-                             PyArray_DIMS(self),
-                             PyArray_STRIDES(self),
-                             PyArray_BYTES(self) + offset,
-                             PyArray_FLAGS(self), (PyObject *)self);
+    ret = (PyArrayObject *)PyArray_NewFromDescrAndBase(
+            Py_TYPE(self),
+            type,
+            PyArray_NDIM(self),
+            PyArray_DIMS(self),
+            PyArray_STRIDES(self),
+            PyArray_BYTES(self) + offset,
+            PyArray_FLAGS(self), (PyObject *)self, (PyObject *)self);
     if (ret == NULL) {
-        return NULL;
-    }
-    Py_INCREF(self);
-    if (PyArray_SetBaseObject(ret, (PyObject *)self) < 0) {
-        Py_DECREF(ret);
         return NULL;
     }
     return ret;

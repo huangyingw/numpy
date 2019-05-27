@@ -92,114 +92,6 @@ parse_index_entry(PyObject *op, npy_intp *step_size,
 }
 
 
-/*
- * Parses an index that has no fancy indexing. Populates
- * out_dimensions, out_strides, and out_offset.
- */
-NPY_NO_EXPORT int
-parse_index(PyArrayObject *self, PyObject *op,
-            npy_intp *out_dimensions,
-            npy_intp *out_strides,
-            npy_intp *out_offset,
-            int check_index)
-{
-    int i, j, n;
-    int nd_old, nd_new, n_add, n_ellipsis;
-    npy_intp n_steps, start, offset, step_size;
-    PyObject *op1 = NULL;
-    int is_slice;
-
-    if (PySlice_Check(op) || op == Py_Ellipsis || op == Py_None) {
-        n = 1;
-        op1 = op;
-        Py_INCREF(op);
-        /* this relies on the fact that n==1 for loop below */
-        is_slice = 1;
-    }
-    else {
-        if (!PySequence_Check(op)) {
-            PyErr_SetString(PyExc_IndexError,
-                            "index must be either an int "
-                            "or a sequence");
-            return -1;
-        }
-        n = PySequence_Length(op);
-        is_slice = 0;
-    }
-
-    nd_old = nd_new = 0;
-
-    offset = 0;
-    for (i = 0; i < n; i++) {
-        if (!is_slice) {
-            op1 = PySequence_GetItem(op, i);
-            if (op1 == NULL) {
-                return -1;
-            }
-        }
-        start = parse_index_entry(op1, &step_size, &n_steps,
-                                  nd_old < PyArray_NDIM(self) ?
-                                  PyArray_DIMS(self)[nd_old] : 0,
-                                  nd_old, check_index ?
-                                  nd_old < PyArray_NDIM(self) : 0);
-        Py_DECREF(op1);
-        if (start == -1) {
-            break;
-        }
-        if (n_steps == NEWAXIS_INDEX) {
-            out_dimensions[nd_new] = 1;
-            out_strides[nd_new] = 0;
-            nd_new++;
-        }
-        else if (n_steps == ELLIPSIS_INDEX) {
-            for (j = i + 1, n_ellipsis = 0; j < n; j++) {
-                op1 = PySequence_GetItem(op, j);
-                if (op1 == Py_None) {
-                    n_ellipsis++;
-                }
-                Py_DECREF(op1);
-            }
-            n_add = PyArray_NDIM(self)-(n-i-n_ellipsis-1+nd_old);
-            if (n_add < 0) {
-                PyErr_SetString(PyExc_IndexError, "too many indices");
-                return -1;
-            }
-            for (j = 0; j < n_add; j++) {
-                out_dimensions[nd_new] = PyArray_DIMS(self)[nd_old];
-                out_strides[nd_new] = PyArray_STRIDES(self)[nd_old];
-                nd_new++; nd_old++;
-            }
-        }
-        else {
-            if (nd_old >= PyArray_NDIM(self)) {
-                PyErr_SetString(PyExc_IndexError, "too many indices");
-                return -1;
-            }
-            offset += PyArray_STRIDES(self)[nd_old]*start;
-            nd_old++;
-            if (n_steps != SINGLE_INDEX) {
-                out_dimensions[nd_new] = n_steps;
-                out_strides[nd_new] = step_size *
-                                            PyArray_STRIDES(self)[nd_old-1];
-                nd_new++;
-            }
-        }
-    }
-    if (i < n) {
-        return -1;
-    }
-    n_add = PyArray_NDIM(self)-nd_old;
-    for (j = 0; j < n_add; j++) {
-        out_dimensions[nd_new] = PyArray_DIMS(self)[nd_old];
-        out_strides[nd_new] = PyArray_STRIDES(self)[nd_old];
-        nd_new++;
-        nd_old++;
-    }
-    *out_offset = offset;
-    return nd_new;
-}
-
-
 /*********************** Element-wise Array Iterator ***********************/
 /*  Aided by Peter J. Verveer's  nd_image package and numpy's arraymap  ****/
 /*         and Python's array iterator                                   ***/
@@ -647,6 +539,7 @@ iter_subscript(PyArrayIterObject *self, PyObject *ind)
     char *dptr;
     int size;
     PyObject *obj = NULL;
+    PyObject *new;
     PyArray_CopySwapFunc *copyswap;
 
     if (ind == Py_Ellipsis) {
@@ -748,35 +641,35 @@ iter_subscript(PyArrayIterObject *self, PyObject *ind)
         obj = ind;
     }
 
-    if (PyArray_Check(obj)) {
-        /* Check for Boolean object */
-        if (PyArray_TYPE((PyArrayObject *)obj) == NPY_BOOL) {
-            ret = iter_subscript_Bool(self, (PyArrayObject *)obj);
-            Py_DECREF(indtype);
-        }
-        /* Check for integer array */
-        else if (PyArray_ISINTEGER((PyArrayObject *)obj)) {
-            PyObject *new;
-            new = PyArray_FromAny(obj, indtype, 0, 0,
-                              NPY_ARRAY_FORCECAST | NPY_ARRAY_ALIGNED, NULL);
-            if (new == NULL) {
-                goto fail;
-            }
-            Py_DECREF(obj);
-            obj = new;
-            new = iter_subscript_int(self, (PyArrayObject *)obj);
-            Py_DECREF(obj);
-            return new;
-        }
-        else {
-            goto fail;
-        }
+    /* Any remaining valid input is an array or has been turned into one */
+    if (!PyArray_Check(obj)) {
+        goto fail;
+    }
+
+    /* Check for Boolean array */
+    if (PyArray_TYPE((PyArrayObject *)obj) == NPY_BOOL) {
+        ret = iter_subscript_Bool(self, (PyArrayObject *)obj);
+        Py_DECREF(indtype);
         Py_DECREF(obj);
         return (PyObject *)ret;
     }
-    else {
-        Py_DECREF(indtype);
+
+    /* Only integer arrays left */
+    if (!PyArray_ISINTEGER((PyArrayObject *)obj)) {
+        goto fail;
     }
+
+    Py_INCREF(indtype);
+    new = PyArray_FromAny(obj, indtype, 0, 0,
+                      NPY_ARRAY_FORCECAST | NPY_ARRAY_ALIGNED, NULL);
+    if (new == NULL) {
+        goto fail;
+    }
+    Py_DECREF(indtype);
+    Py_DECREF(obj);
+    ret = (PyArrayObject *)iter_subscript_int(self, (PyArrayObject *)new);
+    Py_DECREF(new);
+    return (PyObject *)ret;
 
 
  fail:
@@ -1092,16 +985,11 @@ iter_array(PyArrayIterObject *it, PyObject *NPY_UNUSED(op))
     Py_INCREF(PyArray_DESCR(it->ao));
 
     if (PyArray_ISCONTIGUOUS(it->ao)) {
-        ret = (PyArrayObject *)PyArray_NewFromDescr(
-                &PyArray_Type, PyArray_DESCR(it->ao), 1, &size,
-                NULL, PyArray_DATA(it->ao), PyArray_FLAGS(it->ao),
-                (PyObject *)it->ao);
+        ret = (PyArrayObject *)PyArray_NewFromDescrAndBase(
+                &PyArray_Type, PyArray_DESCR(it->ao),
+                1, &size, NULL, PyArray_DATA(it->ao),
+                PyArray_FLAGS(it->ao), (PyObject *)it->ao, (PyObject *)it->ao);
         if (ret == NULL) {
-            return NULL;
-        }
-        Py_INCREF(it->ao);
-        if (PyArray_SetBaseObject(ret, (PyObject *)it->ao) < 0) {
-            Py_DECREF(ret);
             return NULL;
         }
     }
@@ -1374,10 +1262,14 @@ PyArray_MultiIterFromObjects(PyObject **mps, int n, int nadd, ...)
     int i, ntot, err=0;
 
     ntot = n + nadd;
-    if (ntot < 1 || ntot > NPY_MAXARGS) {
+    if (ntot < 0) {
         PyErr_Format(PyExc_ValueError,
-                     "Need at least 1 and at most %d "
-                     "array objects.", NPY_MAXARGS);
+                     "n and nadd arguments must be non-negative", NPY_MAXARGS);
+        return NULL;
+    }
+    if (ntot > NPY_MAXARGS) {
+        PyErr_Format(PyExc_ValueError,
+                     "At most %d array objects are supported.", NPY_MAXARGS);
         return NULL;
     }
     multi = PyArray_malloc(sizeof(PyArrayMultiIterObject));
@@ -1440,10 +1332,14 @@ PyArray_MultiIterNew(int n, ...)
 
     int i, err = 0;
 
-    if (n < 1 || n > NPY_MAXARGS) {
+    if (n < 0) {
         PyErr_Format(PyExc_ValueError,
-                     "Need at least 1 and at most %d "
-                     "array objects.", NPY_MAXARGS);
+                     "n argument must be non-negative", NPY_MAXARGS);
+        return NULL;
+    }
+    if (n > NPY_MAXARGS) {
+        PyErr_Format(PyExc_ValueError,
+                     "At most %d array objects are supported.", NPY_MAXARGS);
         return NULL;
     }
 
@@ -1500,7 +1396,7 @@ arraymultiter_new(PyTypeObject *NPY_UNUSED(subtype), PyObject *args, PyObject *k
     PyArrayMultiIterObject *multi;
     PyObject *arr;
 
-    if (kwds != NULL) {
+    if (kwds != NULL && PyDict_Size(kwds) > 0) {
         PyErr_SetString(PyExc_ValueError,
                         "keyword arguments not accepted.");
         return NULL;
@@ -1521,13 +1417,12 @@ arraymultiter_new(PyTypeObject *NPY_UNUSED(subtype), PyObject *args, PyObject *k
             ++n;
         }
     }
-    if (n < 1 || n > NPY_MAXARGS) {
-        if (PyErr_Occurred()) {
-            return NULL;
-        }
+    if (PyErr_Occurred()) {
+        return NULL;
+    }
+    if (n > NPY_MAXARGS) {
         PyErr_Format(PyExc_ValueError,
-                     "Need at least 1 and at most %d "
-                     "array objects.", NPY_MAXARGS);
+                     "At most %d array objects are supported.", NPY_MAXARGS);
         return NULL;
     }
 

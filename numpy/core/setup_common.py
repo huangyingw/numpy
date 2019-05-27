@@ -40,7 +40,8 @@ C_ABI_VERSION = 0x01000009
 # 0x0000000a - 1.12.x
 # 0x0000000b - 1.13.x
 # 0x0000000c - 1.14.x
-# 0x0000000d - 1.15.x
+# 0x0000000c - 1.15.x
+# 0x0000000d - 1.16.x
 C_API_VERSION = 0x0000000d
 
 class MismatchCAPIWarning(Warning):
@@ -80,7 +81,7 @@ def get_api_versions(apiversion, codegen_dir):
     return curapi_hash, apis_hash[apiversion]
 
 def check_api_version(apiversion, codegen_dir):
-    """Emits a MismacthCAPIWarning if the C API version needs updating."""
+    """Emits a MismatchCAPIWarning if the C API version needs updating."""
     curapi_hash, api_hash = get_api_versions(apiversion, codegen_dir)
 
     # If different hash, it means that the api .txt files in
@@ -110,16 +111,18 @@ OPTIONAL_STDFUNCS = ["expm1", "log1p", "acosh", "asinh", "atanh",
         "rint", "trunc", "exp2", "log2", "hypot", "atan2", "pow",
         "copysign", "nextafter", "ftello", "fseeko",
         "strtoll", "strtoull", "cbrt", "strtold_l", "fallocate",
-        "backtrace"]
+        "backtrace", "madvise"]
 
 
 OPTIONAL_HEADERS = [
 # sse headers only enabled automatically on amd64/x32 builds
                 "xmmintrin.h",  # SSE
                 "emmintrin.h",  # SSE2
+                "immintrin.h",  # AVX
                 "features.h",  # for glibc version linux
                 "xlocale.h",  # see GH#8367
                 "dlfcn.h", # dladdr
+                "sys/mman.h", #madvise
 ]
 
 # optional gcc compiler builtins and their call arguments and optional a
@@ -147,6 +150,8 @@ OPTIONAL_INTRINSICS = [("__builtin_isnan", '5.'),
                         "stdio.h", "LINK_AVX"),
                        ("__asm__ volatile", '"vpand %ymm1, %ymm2, %ymm3"',
                         "stdio.h", "LINK_AVX2"),
+                       ("__asm__ volatile", '"vpaddd %zmm1, %zmm2, %zmm3"',
+                        "stdio.h", "LINK_AVX512F"),
                        ("__asm__ volatile", '"xgetbv"', "stdio.h", "XGETBV"),
                        ]
 
@@ -163,6 +168,23 @@ OPTIONAL_FUNCTION_ATTRIBUTES = [('__attribute__((optimize("unroll-loops")))',
                                  'attribute_target_avx'),
                                 ('__attribute__((target ("avx2")))',
                                  'attribute_target_avx2'),
+                                ('__attribute__((target ("avx512f")))',
+                                 'attribute_target_avx512f'),
+                                ]
+
+# function attributes with intrinsics
+# To ensure your compiler can compile avx intrinsics with just the attributes
+# gcc 4.8.4 support attributes but not with intrisics
+# tested via "#include<%s> int %s %s(void *){code; return 0;};" % (header, attribute, name, code)
+# function name will be converted to HAVE_<upper-case-name> preprocessor macro
+OPTIONAL_FUNCTION_ATTRIBUTES_WITH_INTRINSICS = [('__attribute__((target("avx2")))',
+                                'attribute_target_avx2_with_intrinsics',
+                                '__m256 temp = _mm256_set1_ps(1.0)',
+                                'immintrin.h'),
+                                ('__attribute__((target("avx512f")))',
+                                'attribute_target_avx512f_with_intrinsics',
+                                '__m512 temp = _mm512_set1_ps(1.0)',
+                                'immintrin.h'),
                                 ]
 
 # variable attributes tested via "int %s a" % attribute
@@ -335,9 +357,9 @@ _MOTOROLA_EXTENDED_12B = ['300', '031', '000', '000', '353', '171',
 _IEEE_QUAD_PREC_BE = ['300', '031', '326', '363', '105', '100', '000', '000',
                       '000', '000', '000', '000', '000', '000', '000', '000']
 _IEEE_QUAD_PREC_LE = _IEEE_QUAD_PREC_BE[::-1]
-_DOUBLE_DOUBLE_BE = (['301', '235', '157', '064', '124', '000', '000', '000'] +
+_IBM_DOUBLE_DOUBLE_BE = (['301', '235', '157', '064', '124', '000', '000', '000'] +
                      ['000'] * 8)
-_DOUBLE_DOUBLE_LE = (['000', '000', '000', '124', '064', '157', '235', '301'] +
+_IBM_DOUBLE_DOUBLE_LE = (['000', '000', '000', '124', '064', '157', '235', '301'] +
                      ['000'] * 8)
 
 def long_double_representation(lines):
@@ -381,10 +403,10 @@ def long_double_representation(lines):
                         return 'IEEE_QUAD_BE'
                     elif read[8:-8] == _IEEE_QUAD_PREC_LE:
                         return 'IEEE_QUAD_LE'
-                    elif read[8:-8] == _DOUBLE_DOUBLE_BE:
-                        return 'DOUBLE_DOUBLE_BE'
-                    elif read[8:-8] == _DOUBLE_DOUBLE_LE:
-                        return 'DOUBLE_DOUBLE_LE'
+                    elif read[8:-8] == _IBM_DOUBLE_DOUBLE_LE:
+                        return 'IBM_DOUBLE_DOUBLE_LE'
+                    elif read[8:-8] == _IBM_DOUBLE_DOUBLE_BE:
+                        return 'IBM_DOUBLE_DOUBLE_BE'
                 # if the content was 8 bytes, left with 32-8-8 = 16 bytes
                 elif read[:16] == _BEFORE_SEQ:
                     if read[16:-8] == _IEEE_DOUBLE_LE:
